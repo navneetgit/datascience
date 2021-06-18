@@ -1,0 +1,66 @@
+---
+title: "NYPD Incident Data Report"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This report tries to analyze and answer questions related to rate of crime from NYPD incident reports since 2005. And finally, tries to build a model to accurately predict incident rate during an average day.
+
+```{r import, echo=TRUE}
+library(tidyverse)
+library(lubridate)
+library(modelr)
+url <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+global_data <- read_csv(url)
+```
+
+# Visualizations: Poking the data
+## How safe is it at night - From a simple distribution to "crime score"
+```{r night_safety, echo=TRUE}
+night_safety <- global_data %>% filter(hour(OCCUR_TIME) <= 5 | hour(OCCUR_TIME) >= 22)
+night_safety %>% select("BORO") %>% ggplot() + geom_bar(mapping = aes(x=BORO)) + labs(title="Number of cases reported between 10pm and 5am", subtitle = "A distribution of total cases reported in each area during night")
+night_count <- night_safety %>% select(BORO) %>% group_by(BORO) %>% tally(name='count')
+sum <- sum(night_count$count)
+night_count$crime_score <- (night_count$count)/sum * 100
+night_count %>% select(BORO, crime_score) %>% ggplot() + geom_bar(mapping = aes(x=BORO, y=crime_score), stat="identity") + labs(title="Crime score, higher the worse!", subtitle = "Case counts normalized to report a crime score on a scale of 0-100, 100 being worst") 
+```
+
+## How has the crime rate changed in past years
+```{r crime_rate_yoy, echo=TRUE}
+crime_by_year <- global_data %>% select(OCCUR_DATE, BORO) %>% mutate(OCCUR_YEAR = year(mdy(OCCUR_DATE))) %>% select(OCCUR_YEAR, BORO)
+crime_by_year %>% count(BORO, OCCUR_YEAR, name="cases") %>% ggplot() + geom_tile(mapping = aes(y=BORO, x=OCCUR_YEAR, fill=cases)) + labs(title="Heatmap of cases reported every year") + scale_fill_gradient(low="green", high="red")
+```
+
+As seen from the heatmap, crime in Staten Island has remained well under control, unlike Bronx where reported cases have shown an increase since 2005. Brooklyn on the other hand has seen improvement until recently in 2020 where crime has gone back up!
+
+# Model of incidents during the day
+Starting from the most basic visualization of incident reports spread over time of the day, the distribution looks like:
+```{r simple_distribution, echo=TRUE}
+global_data %>% count(OCCUR_TIME) %>% ggplot(aes(OCCUR_TIME,n)) + geom_point()
+```
+
+In the next step, we try to quantize this information into buckets of hour of the day and reduce some noise in the visualization.
+```{r quantized_distribution, echo=TRUE}
+cases_by_hour <- global_data %>% mutate(hour_of_day = hour(OCCUR_TIME)) %>% group_by(hour_of_day) %>% summarise(incidents=n())
+cases_by_hour <- cases_by_hour %>% mutate(hour_of_day_sqr = hour_of_day^2)
+cases_by_hour %>% ggplot(aes(hour_of_day, incidents)) + geom_point()
+```
+
+Finally, we try to fit this data into a quadratic model:
+```{r model, echo=TRUE}
+cases_by_hour_mod <- lm(incidents ~ hour_of_day + hour_of_day_sqr, data=cases_by_hour)
+grid <- add_predictions(cases_by_hour, cases_by_hour_mod, var = "incidents_prediction")
+ggplot(grid, aes(hour_of_day, incidents)) + geom_point() + geom_line(data = grid, colour = "red", mapping = aes(x=hour_of_day, y=incidents_prediction))
+```
+
+# Sources of bias
+This report is biased towards count of total cases reported and doesn't make an attempt to analyze the category or severity of cases in depth. Neither does this report analyze other aspects of the data such as victim's race, age etc.
+
+```{r session_info, echo=TRUE}
+sessionInfo()
+```
